@@ -1,0 +1,281 @@
+# Load required packages
+library(RSQLite)
+library(data.table)
+library(dplyr)
+library(ggplot2)
+library(readr)
+library(ggpubr)
+library(stats)
+library(gridExtra)
+library(tidyverse)
+library(caret)
+library(nnet)
+library(ROSE)
+
+# set the working directory
+working_directory <- "C:/Users/norma/Desktop/Y2/ST2195/CW ST2195/Part 2"
+if (file.exists(working_directory)) {
+  setwd(working_directory)
+}
+print(getwd())
+
+# Connect to SQLite database
+db_connection <- dbConnect(SQLite(), "airline2_r.db")
+file.exists("C:/Users/norma/Desktop/Y2/ST2195/CW ST2195/Part 2/airports.csv")
+
+# Load CSV datasets
+airports_data <- read.csv("airports.csv", header = TRUE)
+carriers_data <- read.csv("carriers.csv", header = TRUE)
+planes_data <- read.csv("plane-data.csv", header = TRUE)
+
+# Write data into database tables
+dbWriteTable(db_connection, "Airports", airports_data, overwrite = TRUE)
+dbWriteTable(db_connection, "Carriers", carriers_data, overwrite = TRUE)
+dbWriteTable(db_connection, "Planes", planes_data, overwrite = TRUE)
+
+# Merge flight data for multiple years
+combine_flight_data <- function(year_range) {
+  full_data <- data.frame()
+  for (year in year_range) {
+    yearly_data <- read.csv(paste0(year, ".csv.bz2"), header = TRUE)
+    full_data <- rbind(full_data, yearly_data)
+  }
+  return(full_data)
+}
+
+# Merge flight data for years 2000-2004
+flight_data <- combine_flight_data(2000:2004)
+
+# ---- Part 2a ----
+
+# Function to categorize time of day
+assign_time_category <- function(hour) {
+  if (!is.na(hour) && hour >= 5 & hour < 12) {
+    return("Morning")
+  } else if (!is.na(hour) && hour >= 12 & hour < 17) {
+    return("Afternoon")
+  } else if (!is.na(hour) && hour >= 17 & hour < 21) {
+    return("Evening")
+  } else {
+    return("Night")
+  }
+}
+
+# Apply time segmentation to flights
+flight_data$TimeCategory <- sapply(flight_data$DepTime %/% 100, assign_time_category)
+
+# Filtering out negative arrival delays
+flight_data <- flight_data %>% filter(ArrDelay >= 0)
+
+# Calculate average delay by time of day and day of the week
+average_delay <- flight_data %>%
+  group_by(Year, TimeCategory, DayOfWeek) %>%
+  summarize(AverageDelay = mean(ArrDelay, na.rm = TRUE), .groups = "drop")
+
+# Visualizing delay trends by Time of Day
+ggplot(average_delay, aes(x = TimeCategory, y = AverageDelay, fill = factor(DayOfWeek))) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Average Flight Delay by Time of Day", x = "Time of Day", y = "Average Delay (mins)") +
+  theme_minimal()
+
+# Calculate average delay by DayOfWeek
+average_delay_by_day <- flight_data %>%
+  group_by(DayOfWeek) %>%
+  summarize(AverageDelay = mean(ArrDelay, na.rm = TRUE), .groups = "drop")
+
+# Visualizing delay trends by Day of the Week
+ggplot(average_delay_by_day, aes(x = factor(DayOfWeek), y = AverageDelay, fill = factor(DayOfWeek))) +
+  geom_bar(stat = "identity") +
+  labs(title = "Average Arrival Delay by Day of the Week", x = "Day of the Week", y = "Average Delay (mins)") +
+  theme_minimal()
+
+
+# ---- Part 2b ----
+# Initialize an empty list to store plots for part 2b
+plot_list_2b <- list()
+
+# Iterate over each year
+for (year in years) {
+    filename <- paste0(year, ".csv.bz2")
+    ontime <- read_csv(filename, show_col_types = FALSE)
+        
+    # Filter relevant columns and rename them
+    ontime <- ontime %>%
+        select(TailNum, ArrDelay, Year) %>%
+        rename(tailnum = TailNum, ArrDelay = ArrDelay, flight_year = Year)
+        
+    # Merge DataFrames on 'tailnum'
+    merged <- right_join(ontime, planes_data, by = 'tailnum')  # Use planes_data here
+            
+    # Drop rows with NA values
+    merged <- na.omit(merged)
+        
+    # Filter relevant columns and rename them
+    merged <- merged %>%
+        select(issue_date, tailnum, ArrDelay, flight_year)
+            
+    # Convert 'issue_date' to Date
+    merged$issue_date <- as.Date(merged$issue_date, format = "%m/%d/%Y")
+        
+    # Calculate plane age
+    merged$plane_age <- merged$flight_year - as.numeric(format(merged$issue_date, "%Y"))
+      
+    # Filter out negative plane ages
+    merged <- merged[merged$plane_age >= 0, ]
+    # Filter out the negative ArrDelay values
+    merged <- merged[merged$ArrDelay >= 0, ]       
+    
+    # Group by 'issue_year' and calculate average delay
+    grouped <- merged %>%
+        group_by(plane_age) %>%
+        summarise(average_delay = mean(ArrDelay))
+        
+    # Drop rows with NA values
+    grouped_clean <- na.omit(grouped)
+    
+    # Performing linear regression and saving the plots in the list plot_list_2c
+    plot <- ggscatter(grouped_clean, x = "plane_age", y = "average_delay",
+              add = "reg.line", xlab = "Age of Aircraft", ylab = "Average Arrival Delay")
+    plot_list_2b[[year]] <- plot
+    
+    # Correlation Test
+    corr_test <- cor.test(grouped_clean$average_delay, grouped_clean$plane_age,
+                                   method = "pearson")
+    r_value <- corr_test$estimate
+
+    if (0.87 < r_value & r_value <= 1) {
+        print(paste("A correlation coefficient of", round(r_value, 2), "indicates a strong positive correlation between age of the aircraft and average arrival delays. Hence, this shows that there are significantly more delays as the plane gets older in year", year))
+    } else if (0.5 < r_value & r_value <= 0.87) {
+        print(paste("A correlation coefficient of", round(r_value, 2), "indicates a moderate positive correlation between age of the aircraft and average arrival delays. Hence, this shows that there are more delays as the plane gets older in year", year))
+    } else if (0 < r_value & r_value <= 0.5) {
+        print(paste("A correlation coefficient of", round(r_value, 2), "indicates a weak positive correlation between age of the aircraft and average arrival delays. Hence, this shows that delays remain relatively consistent even as the plane gets older in year", year))
+    } else if (-0.5 < r_value & r_value <= 0) {
+        print(paste("A correlation coefficient of", round(r_value, 2), "indicates a weak negative correlation between age of the aircraft and average arrival delays. Hence, this shows that delays remain relatively consistent even as the plane gets older in year", year))
+    } else if (-0.87 < r_value & r_value <= -0.5) {
+        print(paste("A correlation coefficient of", round(r_value, 2), "indicates a moderate negative correlation between age of the aircraft and average arrival delays. Hence, this shows that there are less delays as the plane gets older in year", year))
+    } else if (-1 < r_value & r_value <= -0.87) {
+        print(paste("A correlation coefficient of", round(r_value, 2), "indicates a strong negative correlation between age of the aircraft and average arrival delays. Hence, this shows that there are significantly less delays as the plane gets older in year", year))
+    }
+}
+
+# Plot the saved bar graphs
+plot_list_2b <- plot_list_2b[!sapply(plot_list_2b, is.null)]
+grid.arrange(grobs = plot_list_2b)
+
+
+# ---- Part 2c ----
+
+# Establish database connection
+con <- dbConnect(SQLite(), dbname = "flights_db.sqlite")
+
+# Function to load airports data from database
+get_airports <- function(con) {
+  airports <- dbGetQuery(con, "SELECT iata, lat, long FROM airports")
+  return(airports)
+}
+
+# Retrieve airports data
+airports <- get_airports(con)
+
+# Function to read the CSV file in chunks
+read_in_chunks <- function(filename, chunk_size) {
+  chunk_list <- list()  # Store chunks here
+  con <- bzfile(filename, "r")  # Open bzipped file connection
+  
+  # Read the file in chunks
+  while (length(chunk <- read_csv(con, n_max = chunk_size))) {
+    chunk_list <- append(chunk_list, list(chunk))  # Store each chunk
+  }
+  
+  close(con)  # Close the connection once reading is done
+  return(chunk_list)  # Return the list of chunks
+}
+
+# Initialize years list
+years <- 2000:2004
+chunk_size <- 100000  # Set chunk size (adjust as needed)
+
+# Initialize an empty list to store processed chunks
+all_data <- list()
+
+# Process each year
+for (year in years) {
+  # Construct the filename dynamically for each year
+  filename <- paste0(year, ".csv.bz2")
+  
+  # Read the data in chunks
+  chunks <- read_in_chunks(filename, chunk_size)
+  
+  # Loop through each chunk and process
+  for (chunk in chunks) {
+    # Extract hour information from departure and arrival times
+    chunk$DepHour <- substr(as.character(chunk$CRSDepTime), 1, 2)
+    chunk$ArrHour <- substr(as.character(chunk$CRSArrTime), 1, 2)
+    
+    # Merge with airports data based on Origin and Dest
+    chunk <- merge(chunk, airports, by.x = 'Origin', by.y = 'iata', all.x = TRUE, suffixes = c("", "_origin"))
+    chunk <- merge(chunk, airports, by.x = 'Dest', by.y = 'iata', all.x = TRUE, suffixes = c("_origin", "_dest"))
+    
+    # Convert necessary columns to factors
+    chunk$Origin <- as.factor(chunk$Origin)
+    chunk$Dest <- as.factor(chunk$Dest)
+    chunk$UniqueCarrier <- as.factor(chunk$UniqueCarrier)
+    
+    # Select relevant features and handle missing values
+    features <- chunk %>% 
+      select(Month, DayofMonth, DayOfWeek, DepHour, ArrHour, Origin, lat_origin, long_origin, 
+             Dest, lat_dest, long_dest, Distance, UniqueCarrier)
+    
+    features[is.na(features)] <- 0  # Replace NAs with 0
+    
+    # Append the processed chunk to the list
+    all_data <- append(all_data, list(features))
+  }
+}
+
+# Combine all chunks into a single data frame
+final_data <- bind_rows(all_data)
+
+# Verify that the data looks correct
+print(head(final_data))
+
+# Split the data into features (X) and target (y)
+target <- final_data$Diverted
+features <- final_data %>%
+  select(Month, DayofMonth, DayOfWeek, DepHour, ArrHour, Origin, lat_origin, long_origin, 
+         Dest, lat_dest, long_dest, Distance, UniqueCarrier)
+
+# Split the data into training and testing sets (80/20 split)
+set.seed(100)  # For reproducibility
+train_index <- createDataPartition(target, p = 0.8, list = FALSE)
+X_train <- features[train_index, ]
+X_test <- features[-train_index, ]
+y_train <- target[train_index]
+y_test <- target[-train_index]
+
+# Train logistic regression model
+model <- glm(y_train ~ ., data = X_train, family = binomial)
+summary(model)
+
+# Make predictions on the test set
+y_pred <- predict(model, X_test, type = "response")
+y_pred_class <- ifelse(y_pred > 0.5, 1, 0)  # Convert probabilities to class labels
+
+# Model evaluation: Accuracy and confusion matrix
+accuracy <- sum(y_pred_class == y_test) / length(y_test)
+conf_matrix <- table(y_pred_class, y_test)
+
+# Print results (accuracy, confusion matrix)
+cat("Accuracy:", accuracy, "\n")
+cat("Confusion Matrix:\n")
+print(conf_matrix)
+
+# Plotting the coefficients of the logistic regression model
+coeff_plot <- data.frame(Variable = names(coef(model)), Coefficient = coef(model))
+ggplot(coeff_plot, aes(x = reorder(Variable, Coefficient), y = Coefficient)) +
+  geom_col(fill = 'skyblue') +
+  coord_flip() +
+  labs(title = "Logistic Regression Coefficients", x = "Variables", y = "Coefficients")
+
+# Close the database connection when done
+dbDisconnect(con)

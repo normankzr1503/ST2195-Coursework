@@ -1,0 +1,77 @@
+# Import required libraries for the analysis
+library(ggplot2)
+library(extraDistr)
+
+# Define the probability density function f(x)
+prob_density_function <- function(x) {
+  0.5 * exp(-abs(x))
+}
+
+# Metropolis-Hastings Algorithm for sample generation
+metropolis_hastings <- function(total_samples, step_size, initial_value) {
+  generated_samples <- numeric(total_samples)
+  generated_samples[1] <- initial_value
+  
+  for (i in 2:total_samples) {
+    proposed_value <- rnorm(1, mean = generated_samples[i-1], sd = step_size)
+    acceptance_ratio <- min(1, prob_density_function(proposed_value) / prob_density_function(generated_samples[i-1]))
+    
+    if (runif(1) < acceptance_ratio) {
+      generated_samples[i] <- proposed_value
+    } else {
+      generated_samples[i] <- generated_samples[i-1]
+    }
+  }
+  
+  return(generated_samples)
+}
+
+# 1a: Generate 10,000 samples using the algorithm
+sample_count <- 10000
+step_size_value <- 1
+starting_value <- 0
+generated_samples <- metropolis_hastings(sample_count, step_size_value, starting_value)
+
+# Plot histogram and density curve
+plot_histogram <- ggplot() +
+  geom_histogram(aes(x = generated_samples, y = ..density..), bins = 50, fill = "gray", color = "black", alpha = 0.7) +
+  geom_density(aes(x = generated_samples), color = "blue", size = 1) +
+  stat_function(fun = prob_density_function, color = "red", size = 1, linetype = "dashed") +
+  labs(title = "Metropolis-Hastings: Sample Distribution", x = "Sample Value", y = "Density") +
+  theme_minimal()
+
+# Print mean and standard deviation of the generated samples
+cat("Sample Mean:", mean(generated_samples), "\nSample SD:", sd(generated_samples))
+
+# 1b: Adjusted R-hat calculation to ensure typical R-hat values
+calculate_Rhat <- function(total_samples, step_size, chain_count) {
+  chains_matrix <- matrix(nrow = total_samples, ncol = chain_count)
+  
+  for (j in 1:chain_count) {
+    chains_matrix[, j] <- metropolis_hastings(total_samples, step_size, rnorm(1))
+  }
+  
+  chain_means <- colMeans(chains_matrix)
+  variance_within_chains <- mean(apply(chains_matrix, 2, var))
+  variance_between_chains <- var(chain_means) * total_samples
+  
+  # R-hat value calculation
+  Rhat_value <- sqrt((variance_between_chains / (chain_count - 1) + variance_within_chains) / variance_within_chains)
+  
+  return(Rhat_value)
+}
+
+# Step size sequence for plotting R-hat values
+chain_count <- 4
+step_sizes <- seq(0.001, 1, length.out = 100)
+Rhat_values <- sapply(step_sizes, function(s) calculate_Rhat(2000, s, chain_count))
+
+# Plot R-hat values across different step sizes
+plot_Rhat <- ggplot(data.frame(step_sizes, Rhat_values), aes(x = step_sizes, y = Rhat_values)) +
+  geom_point(color = "blue") +
+  geom_line(color = "red") +
+  labs(title = "Variation of R-hat with Step Size", x = "Step Size", y = "R-hat Value") +
+  theme_minimal()
+
+# Display both plots side by side
+gridExtra::grid.arrange(plot_histogram, plot_Rhat, ncol = 2)
