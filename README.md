@@ -46,6 +46,6 @@ This project analyzes flight data  using **R and Python**, focusing on flight de
 ---
 
 ## 👤 Author
--**Kang Zheng Rui**  
+- **Kang Zheng Rui**  
 Course: ST2195 Programming for Data Science (SIM-UOL)   
 Coursework submission (Mar 2025)
